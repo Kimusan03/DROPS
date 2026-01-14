@@ -1,28 +1,206 @@
+import 'dart:async';               // For Timer
+import 'dart:convert';             // For jsonDecode
 import 'package:flutter/material.dart';
+import 'package:http/http.dart' as http;
 import 'package:supabase_flutter/supabase_flutter.dart';
-import 'homepage.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  // Initialize Supabase with your project URL and anon key
+  // Initialize Supabase
   await Supabase.initialize(
-    url: 'https://hndshgsyfqxplmtayfqe.supabase.co', // replace with your Supabase URL
-    anonKey: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImhuZHNoZ3N5ZnF4cGxtdGF5ZnFlIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Njc2MTI0ODYsImV4cCI6MjA4MzE4ODQ4Nn0.m2mU6MAxQTjf335jLKzfApoknsono6UyMZ0Q3KAiyxU',                    // replace with your anon key
+    url: 'https://YOUR_PROJECT_ID.supabase.co',   // <-- REPLACE
+    anonKey: 'YOUR_PUBLIC_ANON_KEY',             // <-- REPLACE
   );
 
-  runApp(const DropsApp());
+  // Run the app
+  runApp(const MyApp());
 }
 
-class DropsApp extends StatelessWidget {
-  const DropsApp({super.key});
+// ------------------- ROOT WIDGET -------------------
+class MyApp extends StatelessWidget {
+  const MyApp({super.key});
 
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'DROPS App',
+      debugShowCheckedModeBanner: false,
+      title: 'DROPS Dashboard',
       theme: ThemeData(primarySwatch: Colors.blue),
-      home: const WeatherHome(),
+      home: const Dashboard(), // <-- Your Dashboard widget
     );
   }
-} 
+}
+
+class Dashboard extends StatefulWidget {
+  const Dashboard({super.key});
+
+  @override
+  State<Dashboard> createState() => _DashboardState();
+}
+class _DashboardState extends State<Dashboard> {
+  final supabase = Supabase.instance.client;
+
+  // ------------------- OpenWeather API Settings -------------------
+  final String weatherApiKey = '7664af7d0ed6dbd1ad3d66d6421ebccb';  // <-- REPLACE
+  final String city = 'Quezon City,PH';                     // Quezon City weather
+
+  String temperature = '--';
+  String rainStatus = '--';
+
+  // ------------------- Supabase Flood & Rain Data -------------------
+  String flooding = '--';
+  String raining = '--';
+
+  // ------------------- Timer for auto-refresh -------------------
+  Timer? refreshTimer;
+
+  @override
+  void initState() {
+    super.initState();
+    fetchWeather();
+    fetchFloodData();
+
+    // ------------------- Auto-refresh every 10 seconds -------------------
+    refreshTimer = Timer.periodic(Duration(seconds: 10), (timer) {
+      fetchWeather();
+      fetchFloodData();
+    });
+  }
+
+  @override
+  void dispose() {
+    refreshTimer?.cancel();
+    super.dispose();
+  }
+
+  // ------------------- Fetch Weather from OpenWeather -------------------
+  Future<void> fetchWeather() async {
+    try {
+      final url =
+          'https://api.openweathermap.org/data/2.5/weather?q=$city&units=metric&appid=$weatherApiKey';
+
+      final res = await http.get(Uri.parse(url));
+      final data = jsonDecode(res.body);
+
+      setState(() {
+        temperature = '${data['main']['temp']} °C';
+        rainStatus = data['weather'][0]['main']; // Clear, Rain, Clouds, etc.
+      });
+    } catch (e) {
+      setState(() {
+        temperature = '--';
+        rainStatus = '--';
+      });
+      print('Weather API error: $e');
+    }
+  }
+
+  // ------------------- Fetch Flooding & Raining from Supabase -------------------
+  Future<void> fetchFloodData() async {
+    try {
+      final data = await supabase
+          .from('flood_data')
+          .select('flooding,raining')
+          .order('created_at', ascending: false)
+          .limit(1)
+          .single();
+
+      setState(() {
+        flooding = data['flooding'];
+        raining = data['raining'];
+      });
+    } catch (e) {
+      setState(() {
+        flooding = '--';
+        raining = '--';
+      });
+      print('Supabase fetch error: $e');
+    }
+  }
+
+  // ------------------- Color coding for flood -------------------
+  Color floodColor() {
+    if (flooding == 'YES') return Colors.red;
+    if (flooding == 'NO') return Colors.green;
+    return Colors.grey;
+  }
+
+  // ------------------- Color coding for rain -------------------
+  Color rainColor() {
+    if (raining == 'YES') return Colors.blue;
+    if (raining == 'NO') return Colors.grey;
+    return Colors.grey;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text('DROPS Dashboard')),
+      body: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // Temperature card
+            infoCard('Temperature', temperature),
+
+            // Rain forecast from OpenWeather
+            infoCard('Rain Prediction', rainStatus),
+
+            const SizedBox(height: 20),
+
+            // Flooding alert from Arduino/ESP-01
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(20),
+              decoration: BoxDecoration(
+                color: floodColor(),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Text(
+                'Flooding: $flooding',
+                style: const TextStyle(
+                  fontSize: 22,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ),
+
+            const SizedBox(height: 12),
+
+            // Raining alert from water level sensor
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(20),
+              decoration: BoxDecoration(
+                color: rainColor(),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Text(
+                'Raining: $raining',
+                style: const TextStyle(
+                  fontSize: 22,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // ------------------- Helper function for small info cards -------------------
+  Widget infoCard(String title, String value) {
+    return Card(
+      child: ListTile(
+        title: Text(title),
+        trailing: Text(
+          value,
+          style: const TextStyle(fontSize: 18),
+        ),
+      ),
+    );
+  }
+}

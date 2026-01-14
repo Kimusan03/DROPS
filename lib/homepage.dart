@@ -1,95 +1,177 @@
+import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:supabase_flutter/supabase_flutter.dart';
 
-class WeatherHome extends StatefulWidget {
-  const WeatherHome({super.key});
+class HomePage extends StatefulWidget {
+  const HomePage({super.key});
 
   @override
-  _WeatherHomeState createState() => _WeatherHomeState();
+  State<HomePage> createState() => _HomePageState();
 }
 
-class WeatherHomeState extends State<WeatherHome> {
-  String weather = 'Loading...';
-  double waterLevel = 0;
-  bool rainDetected = false;
-
+class _HomePageState extends State<HomePage> {
   final supabase = Supabase.instance.client;
 
-  // Fetch weather from Open-Meteo
-  Future<void> fetchWeather() async {
+  // ------------------- OpenWeather API Settings -------------------
+  final String weatherApiKey = '7664af7d0ed6dbd1ad3d66d6421ebccb'; // <-- REPLACE with your API key
+  final String city = 'Quezon City,PH';                    // <-- You can change city
 
-    const url =
-     'https://api.open-meteo.com/v1/forecast'
-      '?latitude=14.6760'
-      '&longitude=121.0437'
-      '&hourly=temperature_2m,precipitation,weathercode'
-      '&forecast_days=1'
-      '&timezone=Asia/Manila';
+  String temperature = '--';
+  String rainStatus = '--';
 
+  // ------------------- Supabase Flood & Rain Data -------------------
+  String flooding = '--';
+  String raining = '--';
 
-    final response = await http.get(Uri.parse(url));
-    final data = json.decode(response.body);
-
-    setState(() {
-      if (response.statusCode == 200 && data['current_weather'] != null) {
-        double temp = data['current_weather']['temperature'];
-        weather = 'Temperature: $temp°C';
-      } else {
-        weather = 'Error fetching weather';
-      }
-    });
-  }
-
-  // Fetch latest Arduino data from Supabase
-Future<void> fetchArduinoData() async {
-  final data = await supabase
-      .from('arduino_data')
-      .select()
-      .order('timestamp', ascending: false)
-      .limit(1);
-
-  if (data.isNotEmpty) {
-    final latest = data[0];
-    setState(() {
-      waterLevel = (latest['water_level'] ?? 0).toDouble();
-      rainDetected = latest['rain_detected'] ?? false;
-    });
-  }
-}
-
-
-  // Combine both
-  Future<void> refreshData() async {
-    await fetchWeather();
-    await fetchArduinoData();
-  }
+  // ------------------- Timer for auto-refresh -------------------
+  Timer? refreshTimer;
 
   @override
   void initState() {
     super.initState();
-    refreshData();
+    fetchWeather();
+    fetchFloodData();
+
+    // ------------------- Auto-refresh every 10 seconds -------------------
+    refreshTimer = Timer.periodic(Duration(seconds: 10), (timer) {
+      fetchWeather();
+      fetchFloodData();
+    });
+  }
+
+  @override
+  void dispose() {
+    refreshTimer?.cancel();
+    super.dispose();
+  }
+
+  // ------------------- Fetch Weather from OpenWeather -------------------
+  Future<void> fetchWeather() async {
+    try {
+      final url =
+          'https://api.openweathermap.org/data/2.5/weather?q=$city&units=metric&appid=$weatherApiKey';
+
+      final res = await http.get(Uri.parse(url));
+      final data = jsonDecode(res.body);
+
+      setState(() {
+        temperature = '${data['main']['temp']} °C';
+        rainStatus = data['weather'][0]['main']; // Clear, Rain, Clouds, etc.
+      });
+    } catch (e) {
+      setState(() {
+        temperature = '--';
+        rainStatus = '--';
+      });
+      print('Weather API error: $e');
+    }
+  }
+
+  // ------------------- Fetch Flooding & Raining from Supabase -------------------
+  Future<void> fetchFloodData() async {
+    try {
+      final data = await supabase
+          .from('flood_data')
+          .select('flooding,raining')
+          .order('created_at', ascending: false)
+          .limit(1)
+          .single();
+
+      setState(() {
+        flooding = data['flooding'];
+        raining = data['raining'];
+      });
+    } catch (e) {
+      setState(() {
+        flooding = '--';
+        raining = '--';
+      });
+      print('Supabase fetch error: $e');
+    }
+  }
+
+  // ------------------- Color coding for flood -------------------
+  Color floodColor() {
+    if (flooding == 'YES') return Colors.red;
+    if (flooding == 'NO') return Colors.green;
+    return Colors.grey;
+  }
+
+  // ------------------- Color coding for rain -------------------
+  Color rainColor() {
+    if (raining == 'YES') return Colors.blue;
+    if (raining == 'NO') return Colors.grey;
+    return Colors.grey;
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(title: const Text('DROPS Dashboard')),
-      body: Center(
+      body: Padding(
+        padding: const EdgeInsets.all(16),
         child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(weather, style: const TextStyle(fontSize: 28)),
+            // Temperature card
+            infoCard('Temperature', temperature),
+
+            // Rain forecast from OpenWeather
+            infoCard('Rain Prediction', rainStatus),
+
             const SizedBox(height: 20),
-            Text('Water Level: $waterLevel m', style: const TextStyle(fontSize: 24)),
-            Text('Rain Detected: ${rainDetected ? "Yes" : "No"}', style: const TextStyle(fontSize: 24)),
-            const SizedBox(height: 40),
-            ElevatedButton(
-              onPressed: refreshData,
-              child: const Text('Refresh'),
+
+            // Flooding alert from Arduino/ESP-01
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(20),
+              decoration: BoxDecoration(
+                color: floodColor(),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Text(
+                'Flooding: $flooding',
+                style: const TextStyle(
+                  fontSize: 22,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ),
+
+            const SizedBox(height: 12),
+
+            // Raining alert from water level sensor
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(20),
+              decoration: BoxDecoration(
+                color: rainColor(),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Text(
+                'Raining: $raining',
+                style: const TextStyle(
+                  fontSize: 22,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
             ),
           ],
+        ),
+      ),
+    );
+  }
+
+  // ------------------- Helper function for small info cards -------------------
+  Widget infoCard(String title, String value) {
+    return Card(
+      child: ListTile(
+        title: Text(title),
+        trailing: Text(
+          value,
+          style: const TextStyle(fontSize: 18),
         ),
       ),
     );
