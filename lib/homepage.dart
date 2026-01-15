@@ -2,7 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
-import 'package:supabase_flutter/supabase_flutter.dart';
+import 'ground_config.dart'; // make sure this points to your GroundConfig file
 
 class HomePage extends StatefulWidget {
   const HomePage({super.key});
@@ -12,21 +12,22 @@ class HomePage extends StatefulWidget {
 }
 
 class _HomePageState extends State<HomePage> {
-  final supabase = Supabase.instance.client;
-
   // ------------------- OpenWeather API Settings -------------------
-  final String weatherApiKey = '7664af7d0ed6dbd1ad3d66d6421ebccb'; // <-- REPLACE with your API key
-  final String city = 'Quezon City,PH';                    // <-- You can change city
+  final String weatherApiKey = '7664af7d0ed6dbd1ad3d66d6421ebccb'; 
+  final String city = 'Quezon City,PH'; 
 
   String temperature = '--';
   String rainStatus = '--';
 
-  // ------------------- Supabase Flood & Rain Data -------------------
+  // ------------------- Local Python DROPS API -------------------
+  final String dropsApiUrl = 'http://192.168.0.111:5000/water'; // your PC IP
+  double? waterLevel;
+  double? groundLevel; // set by GroundConfig
   String flooding = '--';
   String raining = '--';
 
-  // ------------------- Timer for auto-refresh -------------------
   Timer? refreshTimer;
+  bool _fetching = false;
 
   @override
   void initState() {
@@ -34,8 +35,8 @@ class _HomePageState extends State<HomePage> {
     fetchWeather();
     fetchFloodData();
 
-    // ------------------- Auto-refresh every 10 seconds -------------------
-    refreshTimer = Timer.periodic(Duration(seconds: 10), (timer) {
+    // Auto-refresh every 1 second for near real-time
+    refreshTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
       fetchWeather();
       fetchFloodData();
     });
@@ -52,13 +53,12 @@ class _HomePageState extends State<HomePage> {
     try {
       final url =
           'https://api.openweathermap.org/data/2.5/weather?q=$city&units=metric&appid=$weatherApiKey';
-
       final res = await http.get(Uri.parse(url));
       final data = jsonDecode(res.body);
 
       setState(() {
         temperature = '${data['main']['temp']} °C';
-        rainStatus = data['weather'][0]['main']; // Clear, Rain, Clouds, etc.
+        rainStatus = data['weather'][0]['main'];
       });
     } catch (e) {
       setState(() {
@@ -69,45 +69,80 @@ class _HomePageState extends State<HomePage> {
     }
   }
 
-  // ------------------- Fetch Flooding & Raining from Supabase -------------------
+  // ------------------- Fetch Flooding & Raining from Python API -------------------
   Future<void> fetchFloodData() async {
+    if (_fetching) return;
+    _fetching = true;
     try {
-      final data = await supabase
-          .from('flood_data')
-          .select('flooding,raining')
-          .order('created_at', ascending: false)
-          .limit(1)
-          .single();
+      final res = await http.get(Uri.parse(dropsApiUrl)).timeout(const Duration(seconds: 2));
+      if (res.statusCode == 200) {
+        final data = jsonDecode(res.body);
+        final level = (data['water_level_cm'] as num?)?.toDouble() ?? 0.0;
 
-      setState(() {
-        flooding = data['flooding'];
-        raining = data['raining'];
-      });
+        setState(() {
+          waterLevel = level;
+
+          if (groundLevel != null) {
+            final delta = waterLevel! - groundLevel!;
+            flooding = (delta >= 3) ? 'YES' : 'NO'; // customize threshold
+            raining = (waterLevel! > 0) ? 'YES' : 'NO';
+          } else {
+            flooding = '--';
+            raining = '--';
+          }
+        });
+      } else {
+        setState(() {
+          flooding = '--';
+          raining = '--';
+        });
+      }
     } catch (e) {
       setState(() {
         flooding = '--';
         raining = '--';
       });
-      print('Supabase fetch error: $e');
+      print('Python API fetch error: $e');
+    } finally {
+      _fetching = false;
     }
   }
 
-  // ------------------- Color coding for flood -------------------
+  // ------------------- Color coding -------------------
   Color floodColor() {
     if (flooding == 'YES') return Colors.red;
     if (flooding == 'NO') return Colors.green;
     return Colors.grey;
   }
 
-  // ------------------- Color coding for rain -------------------
   Color rainColor() {
     if (raining == 'YES') return Colors.blue;
     if (raining == 'NO') return Colors.grey;
     return Colors.grey;
   }
 
+  // ------------------- Navigate to GroundConfig -------------------
+  Future<void> setGroundLevel() async {
+    final selectedGround = await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => GroundConfig(apiUrl: dropsApiUrl),
+      ),
+    );
+    if (selectedGround != null && selectedGround is double) {
+      setState(() {
+        groundLevel = selectedGround;
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Ground set at ${groundLevel!.toStringAsFixed(2)} cm')),
+      );
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
+    final delta = (groundLevel != null && waterLevel != null) ? waterLevel! - groundLevel! : null;
+
     return Scaffold(
       appBar: AppBar(title: const Text('DROPS Dashboard')),
       body: Padding(
@@ -123,7 +158,7 @@ class _HomePageState extends State<HomePage> {
 
             const SizedBox(height: 20),
 
-            // Flooding alert from Arduino/ESP-01
+            // Flooding alert
             Container(
               width: double.infinity,
               padding: const EdgeInsets.all(20),
@@ -133,16 +168,13 @@ class _HomePageState extends State<HomePage> {
               ),
               child: Text(
                 'Flooding: $flooding',
-                style: const TextStyle(
-                  fontSize: 22,
-                  fontWeight: FontWeight.bold,
-                ),
+                style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold),
               ),
             ),
 
             const SizedBox(height: 12),
 
-            // Raining alert from water level sensor
+            // Raining alert
             Container(
               width: double.infinity,
               padding: const EdgeInsets.all(20),
@@ -152,11 +184,24 @@ class _HomePageState extends State<HomePage> {
               ),
               child: Text(
                 'Raining: $raining',
-                style: const TextStyle(
-                  fontSize: 22,
-                  fontWeight: FontWeight.bold,
-                ),
+                style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold),
               ),
+            ),
+
+            const SizedBox(height: 12),
+
+            // Show raw water level
+            if (waterLevel != null)
+              Text('Water Level: ${waterLevel!.toStringAsFixed(2)} cm', style: const TextStyle(fontSize: 18)),
+
+            if (delta != null)
+              Text('Δ from Ground: ${delta.toStringAsFixed(2)} cm', style: const TextStyle(fontSize: 18)),
+
+            const SizedBox(height: 12),
+
+            ElevatedButton(
+              onPressed: setGroundLevel,
+              child: const Text('Set Ground Level'),
             ),
           ],
         ),
@@ -164,7 +209,6 @@ class _HomePageState extends State<HomePage> {
     );
   }
 
-  // ------------------- Helper function for small info cards -------------------
   Widget infoCard(String title, String value) {
     return Card(
       child: ListTile(

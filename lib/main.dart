@@ -1,19 +1,9 @@
-import 'dart:async';               // For Timer
-import 'dart:convert';             // For jsonDecode
+import 'dart:async';
+import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
-import 'package:supabase_flutter/supabase_flutter.dart';
 
-void main() async {
-  WidgetsFlutterBinding.ensureInitialized();
-
-  // Initialize Supabase
-  await Supabase.initialize(
-    url: 'https://YOUR_PROJECT_ID.supabase.co',   // <-- REPLACE
-    anonKey: 'YOUR_PUBLIC_ANON_KEY',             // <-- REPLACE
-  );
-
-  // Run the app
+void main() {
   runApp(const MyApp());
 }
 
@@ -27,7 +17,7 @@ class MyApp extends StatelessWidget {
       debugShowCheckedModeBanner: false,
       title: 'DROPS Dashboard',
       theme: ThemeData(primarySwatch: Colors.blue),
-      home: const Dashboard(), // <-- Your Dashboard widget
+      home: const Dashboard(),
     );
   }
 }
@@ -38,21 +28,21 @@ class Dashboard extends StatefulWidget {
   @override
   State<Dashboard> createState() => _DashboardState();
 }
-class _DashboardState extends State<Dashboard> {
-  final supabase = Supabase.instance.client;
 
+class _DashboardState extends State<Dashboard> {
   // ------------------- OpenWeather API Settings -------------------
   final String weatherApiKey = '7664af7d0ed6dbd1ad3d66d6421ebccb';  // <-- REPLACE
-  final String city = 'Quezon City,PH';                     // Quezon City weather
+  final String city = 'Quezon City,PH';
 
   String temperature = '--';
   String rainStatus = '--';
 
-  // ------------------- Supabase Flood & Rain Data -------------------
+  // ------------------- Local Python DROPS API -------------------
+  final String dropsApiUrl = 'http://localhost:5000/water'; // replace with PC IP if needed
+  double? waterLevel;
   String flooding = '--';
   String raining = '--';
 
-  // ------------------- Timer for auto-refresh -------------------
   Timer? refreshTimer;
 
   @override
@@ -61,8 +51,8 @@ class _DashboardState extends State<Dashboard> {
     fetchWeather();
     fetchFloodData();
 
-    // ------------------- Auto-refresh every 10 seconds -------------------
-    refreshTimer = Timer.periodic(Duration(seconds: 10), (timer) {
+    // Auto-refresh every 10 seconds
+    refreshTimer = Timer.periodic(const Duration(seconds: 10), (timer) {
       fetchWeather();
       fetchFloodData();
     });
@@ -79,7 +69,6 @@ class _DashboardState extends State<Dashboard> {
     try {
       final url =
           'https://api.openweathermap.org/data/2.5/weather?q=$city&units=metric&appid=$weatherApiKey';
-
       final res = await http.get(Uri.parse(url));
       final data = jsonDecode(res.body);
 
@@ -96,26 +85,31 @@ class _DashboardState extends State<Dashboard> {
     }
   }
 
-  // ------------------- Fetch Flooding & Raining from Supabase -------------------
+  // ------------------- Fetch Flooding & Raining from Python API -------------------
   Future<void> fetchFloodData() async {
     try {
-      final data = await supabase
-          .from('flood_data')
-          .select('flooding,raining')
-          .order('created_at', ascending: false)
-          .limit(1)
-          .single();
-
-      setState(() {
-        flooding = data['flooding'];
-        raining = data['raining'];
-      });
+      final res = await http.get(Uri.parse(dropsApiUrl)).timeout(const Duration(seconds: 2));
+      if (res.statusCode == 200) {
+        final data = jsonDecode(res.body);
+        final level = (data['water_level_cm'] as num?)?.toDouble() ?? 0.0;
+        setState(() {
+          waterLevel = level;
+          // thresholds (adjust as needed)
+          flooding = (level > 30) ? 'YES' : 'NO';
+          raining = (level > 10) ? 'YES' : 'NO';
+        });
+      } else {
+        setState(() {
+          flooding = '--';
+          raining = '--';
+        });
+      }
     } catch (e) {
       setState(() {
         flooding = '--';
         raining = '--';
       });
-      print('Supabase fetch error: $e');
+      print('Python API fetch error: $e');
     }
   }
 
@@ -150,7 +144,7 @@ class _DashboardState extends State<Dashboard> {
 
             const SizedBox(height: 20),
 
-            // Flooding alert from Arduino/ESP-01
+            // Flooding alert from Arduino/Python API
             Container(
               width: double.infinity,
               padding: const EdgeInsets.all(20),
@@ -169,7 +163,7 @@ class _DashboardState extends State<Dashboard> {
 
             const SizedBox(height: 12),
 
-            // Raining alert from water level sensor
+            // Raining alert based on water level
             Container(
               width: double.infinity,
               padding: const EdgeInsets.all(20),
@@ -185,6 +179,13 @@ class _DashboardState extends State<Dashboard> {
                 ),
               ),
             ),
+
+            const SizedBox(height: 12),
+
+            // Optional: show raw water level
+            if (waterLevel != null)
+              Text('Water Level: ${waterLevel!.toStringAsFixed(2)} cm',
+                  style: const TextStyle(fontSize: 18)),
           ],
         ),
       ),
