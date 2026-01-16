@@ -7,9 +7,11 @@ import 'ground_config.dart';
 
 class HomePage extends StatefulWidget {
   const HomePage({super.key});
+  
 
   @override
   State<HomePage> createState() => _HomePageState();
+  
 }
 
 class _HomePageState extends State<HomePage> {
@@ -148,7 +150,7 @@ class _HomePageState extends State<HomePage> {
 
         // --- RAIN DETECTION LOGIC ---
         if (waterSensorRaw != null) {
-          if (waterSensorRaw! > 400) {
+          if (waterSensorRaw! > 250) {
             raining = 'YES';
             rainIntensity = "Heavy Rain";
           } else if (waterSensorRaw! > 30) {
