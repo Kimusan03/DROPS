@@ -8,7 +8,12 @@ plugins {
 android {
     namespace = "com.example.drops_prototype"
     compileSdk = flutter.compileSdkVersion
-    ndkVersion = flutter.ndkVersion
+    ndkVersion = "27.0.12077973" 
+    externalNativeBuild {
+        cmake {
+            version = "3.22.1"
+            }
+    }
 
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17

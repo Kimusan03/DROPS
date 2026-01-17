@@ -42,7 +42,7 @@ class _GroundConfigState extends State<GroundConfig> {
       // robust URL parsing
       final uri = Uri.tryParse(widget.apiUrl);
       if (uri == null || !uri.hasScheme) {
-        throw FormatException("Invalid URL format");
+        throw const FormatException("Invalid URL format");
       }
 
       final resp = await http.get(uri).timeout(const Duration(seconds: 3));
